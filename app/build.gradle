@@ -1,0 +1,38 @@
+plugins { id 'com.android.application' }
+
+def buildNumber = (System.getenv('VERSION_CODE') ?: '1') as Integer
+
+android {
+    namespace 'com.exerciseroutine.tracker'
+    compileSdk 34
+    defaultConfig {
+        applicationId 'com.exerciseroutine.tracker'
+        minSdk 24
+        targetSdk 34
+        versionCode buildNumber
+        versionName "1.0.${buildNumber}"
+    }
+    signingConfigs {
+        // Fixed personal signing key so each new build installs over the last one.
+        release {
+            storeFile file('release.keystore')
+            storePassword 'ertracker'
+            keyAlias 'ert'
+            keyPassword 'ertracker'
+        }
+    }
+    buildTypes {
+        release {
+            minifyEnabled false
+            signingConfig signingConfigs.release
+        }
+    }
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+}
+
+dependencies {
+    implementation 'androidx.webkit:webkit:1.11.0'
+}

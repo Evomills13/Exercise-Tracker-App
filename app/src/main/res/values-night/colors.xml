@@ -1,4 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <color name="bg">#11161B</color>
+    <color name="ink">#E4E9ED</color>
+    <color name="muted">#95A2AE</color>
+    <color name="accent">#DC8C5C</color>
 </resources>

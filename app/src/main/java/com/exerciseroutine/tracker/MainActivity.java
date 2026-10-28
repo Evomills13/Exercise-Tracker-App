@@ -4,6 +4,7 @@ import android.app.Activity;
 import android.content.Intent;
 import android.net.Uri;
 import android.os.Bundle;
+import android.view.View;
 import android.webkit.JavascriptInterface;
 import android.webkit.ValueCallback;
 import android.webkit.WebChromeClient;
@@ -35,14 +36,19 @@ public class MainActivity extends Activity {
     private static final int REQ_SAVE_FILE = 2;
 
     private WebView web;
+    private View splash;
     private ValueCallback<Uri[]> fileCallback;
     private String pendingBackup;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
-        web = new WebView(this);
-        setContentView(web);
+        setContentView(R.layout.activity_main);
+        web = findViewById(R.id.web);
+        splash = findViewById(R.id.splash);
+        web.setBackgroundColor(getColor(R.color.bg));
+        // Safety net: never leave the splash up for more than 10 seconds.
+        splash.postDelayed(this::hideSplash, 10000);
 
         WebSettings s = web.getSettings();
         s.setJavaScriptEnabled(true);
@@ -58,6 +64,12 @@ public class MainActivity extends Activity {
             @Override
             public WebResourceResponse shouldInterceptRequest(WebView view, WebResourceRequest request) {
                 return loader.shouldInterceptRequest(request.getUrl());
+            }
+
+            @Override
+            public void onPageFinished(WebView view, String url) {
+                // The app normally says it's ready itself; this is a backstop if it can't.
+                splash.postDelayed(MainActivity.this::hideSplash, 3000);
             }
 
             @Override
@@ -95,11 +107,21 @@ public class MainActivity extends Activity {
         web.loadUrl("https://" + HOST + "/assets/index.html");
     }
 
+    private void hideSplash() {
+        if (splash == null || splash.getVisibility() == View.GONE) return;
+        splash.animate().alpha(0f).setDuration(250).withEndAction(() -> splash.setVisibility(View.GONE)).start();
+    }
+
     private File dataFile() {
         return new File(getFilesDir(), "data.json");
     }
 
     private class Bridge {
+        @JavascriptInterface
+        public void ready() {
+            runOnUiThread(MainActivity.this::hideSplash);
+        }
+
         @JavascriptInterface
         public String load() {
             File f = dataFile();

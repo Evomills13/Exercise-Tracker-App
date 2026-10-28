@@ -4,7 +4,7 @@
 <meta name="claude:viewport-fit-sides" content="cover">
 <meta name="theme-color" content="#eef1f3">
 <link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Saira+Condensed:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@500&display=swap">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Saira+Condensed:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@500&display=swap" media="print" onload="this.media='all'">
 <style>
 /* Layout: one-column phone app. Sticky top bar, scrolling content, fixed bottom tab bar. Field-log feel: condensed display type, leather accent. */
 :root {
@@ -1503,7 +1503,9 @@ async function initStore() {
   if (BRIDGE) {
     try { const raw = BRIDGE.load(); if (raw) Object.assign(docs, JSON.parse(raw)); } catch (e) {}
     storeState = 'device'; loadSettings(); ui.week = currentWeek(); ui.ciWeek = ui.week;
-    setSave('saved', 'On this phone'); render(); return;
+    setSave('saved', 'On this phone'); render();
+    try { BRIDGE.ready && BRIDGE.ready(); } catch (e) {}
+    return;
   }
   const use = window.claude && window.claude.use;
   if (!use) { storeState = 'none'; setSave('local'); render(); return; }

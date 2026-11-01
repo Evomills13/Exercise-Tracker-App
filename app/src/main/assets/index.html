@@ -1270,7 +1270,7 @@ for (const k in EX) {
 for (const k in EX) { const e = EX[k]; if (e.anim && e.anim.alias_anim) e.anim = EX[e.anim.alias_anim].anim; }
 
 // ===== The plan: phases 1–4 match the plan doc and tracker; 5–6 extend it to 36 or 52 weeks =====
-const START = new Date(2026, 10, 2); // Mon 2 Nov 2026
+const START = new Date(2026, 10, 9); // Mon 9 Nov 2026
 const PHASES = [
   { n: 1, name: 'Foundation', from: 1, to: 4, aim: 'Build the habit and prepare your joints. Finish each session feeling you could do a bit more.' },
   { n: 2, name: 'Build', from: 5, to: 10, aim: 'Harder variations, first pull-up work, and running up to 30 minutes non-stop.' },
@@ -1620,7 +1620,7 @@ function viewWeek() {
   const ci = docs['c-' + w];
   return `${storeBanner()}
   <section class="weekhead">
-    ${before ? `<div class="banner"><b>Your plan starts Monday 2 November.</b><span class="small">Week 1 is shown below so you can see what's coming.</span></div>` : ''}
+    ${before ? `<div class="banner"><b>Your plan starts Monday ${fmt(START).replace(/(\d+) (\w+)/, (m, d, mo) => d + ' ' + ({Jan:'January',Feb:'February',Mar:'March',Apr:'April',May:'May',Jun:'June',Jul:'July',Aug:'August',Sep:'September',Oct:'October',Nov:'November',Dec:'December'})[mo])}.</b><span class="small">Week 1 is shown below so you can see what's coming.</span></div>` : ''}
     <div class="eyebrow">Phase ${ph.n} · ${ph.name}</div>
     <div class="weeknav">
       <button class="iconbtn" data-step="-1" aria-label="Previous week" ${w === 1 ? 'disabled' : ''}>${ICON.prev}</button>
@@ -1813,7 +1813,7 @@ function phaseSpan(adds) {
 }
 function viewPlan() {
   const W = totalWeeks(), end = addDays(monday(W), 6);
-  const lens = [[24, 'Phases 1–4', 'Ends with your half marathon'], [36, 'Adds Phase 5', 'Strength & Speed, weeks 25–36'], [52, 'Adds Phases 5 and 6', 'A full year, to 25 Oct 2027']]
+  const lens = [[24, 'Phases 1–4', 'Ends with your half marathon'], [36, 'Adds Phase 5', 'Strength & Speed, weeks 25–36'], [52, 'Adds Phases 5 and 6', 'A full year, to ' + fmtY(addDays(monday(52), 6))]]
     .map(([n, a, b]) => `<button class="seg" aria-pressed="${W === n}" data-weeks="${n}"><b>${n} weeks</b><span>${a}</span><span>${b}</span></button>`).join('');
   const cats = [...new Set(TARGETS.map(t => t.cat))];
   const tcards = cats.map(c => `<div class="stack"><h2>${esc(c)}</h2>${TARGETS.filter(t => t.cat === c).map(t => {

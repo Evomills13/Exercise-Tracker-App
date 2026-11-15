@@ -1270,7 +1270,9 @@ for (const k in EX) {
 for (const k in EX) { const e = EX[k]; if (e.anim && e.anim.alias_anim) e.anim = EX[e.anim.alias_anim].anim; }
 
 // ===== The plan: phases 1–4 match the plan doc and tracker; 5–6 extend it to 36 or 52 weeks =====
-const START = new Date(2026, 10, 9); // Mon 9 Nov 2026
+const DEFAULT_START = '2026-11-16'; // Mon 16 Nov 2026; you can change it on the Plan tab
+const parseDay = s => { const [y, m, d] = s.split('-').map(Number); return new Date(y, m - 1, d); };
+let START = parseDay(DEFAULT_START);
 const PHASES = [
   { n: 1, name: 'Foundation', from: 1, to: 4, aim: 'Build the habit and prepare your joints. Finish each session feeling you could do a bit more.' },
   { n: 2, name: 'Build', from: 5, to: 10, aim: 'Harder variations, first pull-up work, and running up to 30 minutes non-stop.' },
@@ -1332,7 +1334,7 @@ const RUN_NOTES = {
 };
 
 // ---- settings (saved with your logs) ----
-const SDEF = () => ({ weeks: 24, focus: 'half', targets: [], swaps: {}, removed: {}, added: {} });
+const SDEF = () => ({ start: DEFAULT_START, cal: null, weeks: 24, focus: 'half', targets: [], swaps: {}, removed: {}, added: {} });
 let SETTINGS = SDEF();
 const totalWeeks = () => SETTINGS.weeks || 24;
 const phasesInPlan = () => PHASES.filter(p => p.from <= totalWeeks());
@@ -1496,8 +1498,10 @@ async function flush(id) {
 function loadSettings() {
   const d = docs.settings;
   SETTINGS = Object.assign(SDEF(), d ? JSON.parse(JSON.stringify(d)) : {});
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(SETTINGS.start || '')) SETTINGS.start = DEFAULT_START;
+  START = parseDay(SETTINGS.start);
 }
-function saveSettings() { docs.settings = JSON.parse(JSON.stringify(SETTINGS)); touch('settings'); }
+function saveSettings(noCal) { docs.settings = JSON.parse(JSON.stringify(SETTINGS)); touch('settings'); if (!noCal) calNeedsSync(); }
 
 async function initStore() {
   if (BRIDGE) {
@@ -1505,6 +1509,7 @@ async function initStore() {
     storeState = 'device'; loadSettings(); ui.week = currentWeek(); ui.ciWeek = ui.week;
     setSave('saved', 'On this phone'); render();
     try { BRIDGE.ready && BRIDGE.ready(); } catch (e) {}
+    if (CAL_OK && SETTINGS.cal) { try { if (BRIDGE.hasCalendarPermission()) { cal.perm = true; cal.list = JSON.parse(BRIDGE.calendars()); } } catch (e) {} }
     return;
   }
   const use = window.claude && window.claude.use;
@@ -1834,6 +1839,7 @@ function viewPlan() {
   for (const k in SETTINGS.added) { const [P, s] = k.split('-'); (SETTINGS.added[k] || []).filter(a => !a.src).forEach(a => ch.push(`<div class="change"><span class="small"><b>Phase ${P.slice(1)} Strength ${s}:</b> added ${esc(exName(a.id))}</span><button class="btn link small" data-undoadd="${k}|${a.uid}">Remove</button></div>`)); }
   const focus = W > 24 ? `<div class="card"><h3>Running from week 25</h3><div class="segs three">${Object.entries(RUN_FOCUS).map(([k, f]) => `<button class="seg" aria-pressed="${SETTINGS.focus === k}" data-focus="${k}"><b>${esc(f.name)}</b></button>`).join('')}</div><p class="small muted">${esc(RUN_FOCUS[SETTINGS.focus].blurb)}</p></div>` : '';
   return `${storeBanner()}<section class="stack" style="gap:4px"><div class="eyebrow">Your plan</div><h1>Plan &amp; targets</h1><p class="small muted">Currently ${W} weeks, ending ${fmtY(end)}.</p></section>
+  ${startCard()}
   <div class="card"><h3>Plan length</h3><div class="segs three">${lens}</div>
   ${W > 24 ? `<p class="small muted">${phasesInPlan().slice(4).map(p => `Phase ${p.n}, ${p.name} (weeks ${p.from}–${p.to}): ${p.aim}`).map(esc).join(' ')}</p>` : '<p class="small muted">Extend to keep progressing after the half marathon: weighted calisthenics, harder skills and faster running.</p>'}</div>
   ${focus}
@@ -1958,6 +1964,10 @@ main.addEventListener('click', ev => {
     if (t.dataset.confirm !== '1') { t.dataset.confirm = '1'; t.textContent = 'Tap again to reset'; return; }
     SETTINGS.swaps = {}; SETTINGS.removed = {}; for (const k in SETTINGS.added) SETTINGS.added[k] = SETTINGS.added[k].filter(a => a.src); saveSettings(); render(); return;
   }
+  if (D.setstart) { setStart(); return; }
+  if (D.calconnect) { calConnect(); return; }
+  if (D.calsync) { calSync(); return; }
+  if (D.calunlink) { SETTINGS.cal = null; saveSettings(true); toast('Calendar unlinked. Sessions already in it stay there.'); render(); return; }
   if (D.backup) { doBackup(); return; }
   if (D.confirmrestore) { confirmRestore(); return; }
   if (D.status) {
@@ -1966,6 +1976,106 @@ main.addEventListener('click', ev => {
     touch(id); render(); return;
   }
 });
+
+// ---- start date & calendar ----
+const iso = d => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+const DAYNAME = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+const longDate = d => `${DAYNAME[d.getDay()]} ${d.getDate()} ${['January','February','March','April','May','June','July','August','September','October','November','December'][d.getMonth()]} ${d.getFullYear()}`;
+const toMonday = d => addDays(d, (8 - d.getDay()) % 7); // the chosen day if it's a Monday, else the next Monday
+const CAL_OK = !!(BRIDGE && BRIDGE.calendars);
+const cal = { list: null, busy: false, msg: '', perm: null };
+function startCard() {
+  const end = addDays(monday(totalWeeks()), 6);
+  let calBlock;
+  if (!CAL_OK) calBlock = `<p class="small muted">Calendar updates happen in the phone app. Change the date there and your Google Calendar follows.</p>`;
+  else if (cal.perm === false) calBlock = `<p class="small">Calendar access was turned down. To allow it: phone Settings → Apps → Exercise Routine Tracker → Permissions → Calendar.</p><button class="btn" data-calconnect="1">Try again</button>`;
+  else if (!SETTINGS.cal) calBlock = `<p class="small muted">Link a calendar and the app adds every session to it, and moves them whenever you change the start date, plan length or exercises.</p><button class="btn primary" data-calconnect="1">Link my Google Calendar</button>`;
+  else {
+    const opts = (cal.list || [{ id: SETTINGS.cal.id, name: SETTINGS.cal.name }]).map(c => `<option value="${esc(c.id)}" ${String(c.id) === String(SETTINGS.cal.id) ? 'selected' : ''}>${esc(c.name)}${c.account && c.account !== c.name ? ' (' + esc(c.account) + ')' : ''}</option>`).join('');
+    calBlock = `<div class="field"><label for="cal-pick">Calendar</label><select id="cal-pick">${opts}</select></div>
+      <div class="row between wrap"><span class="small muted" id="cal-msg" role="status">${esc(cal.busy ? 'Updating your calendar…' : cal.msg || (SETTINGS.cal.synced ? 'Last updated ' + SETTINGS.cal.synced + (SETTINGS.cal.n ? ' · ' + SETTINGS.cal.n + ' sessions' : '') : 'Not updated yet'))}</span>
+      <span class="row" style="gap:14px"><button class="btn link small" data-calsync="1" ${cal.busy ? 'disabled' : ''}>Update now</button><button class="btn link small danger" data-calunlink="1" ${cal.busy ? 'disabled' : ''}>Unlink</button></span></div>`;
+  }
+  return `<div class="card"><h3>Start date</h3>
+    <p class="small muted">Week 1 starts on a Monday. Currently ${esc(longDate(START))}, ending ${esc(fmtY(end))}.</p>
+    <div class="row wrap" style="gap:10px;align-items:flex-end"><div class="field" style="flex:1;min-width:160px"><label for="start-date">New start date</label><input id="start-date" type="date" value="${SETTINGS.start}" style="font-family:var(--f-body)"></div>
+    <button class="btn primary" data-setstart="1">Set start date</button></div>
+    <p class="small muted" id="start-msg"></p>
+    ${calBlock}</div>`;
+}
+function setStart() {
+  const v = ($('#start-date') || {}).value; if (!v) return;
+  const mon = toMonday(parseDay(v)), s = iso(mon);
+  if (s === SETTINGS.start) { $('#start-msg').textContent = 'That is already your start date.'; return; }
+  SETTINGS.start = s; START = mon; saveSettings();
+  ui.week = currentWeek(); ui.ciWeek = ui.week;
+  toast(`Plan now starts ${longDate(mon)}` + (iso(parseDay(v)) !== s ? ' (the Monday after the day you picked)' : '') + (SETTINGS.cal && CAL_OK ? '. Updating your calendar…' : ''));
+  render();
+}
+// Every session as a calendar event, built from your current plan (swaps, additions and plan length included)
+const LONG_MIN = { 1: 45, 2: 60, 3: 90, 4: 150, 5: 150, 6: 150 };
+function calEvents() {
+  const out = [];
+  for (let w = 1; w <= totalWeeks(); w++) {
+    const ph = phaseOf(w);
+    for (const s of SESSIONS) {
+      const d = addDays(monday(w), s.off);
+      const [hh, mm] = s.key === 'Wed' ? [17, 30] : s.key === 'Sun' ? [10, 0] : [18, 0];
+      const start = new Date(d.getFullYear(), d.getMonth(), d.getDate(), hh, mm);
+      let mins, title, desc;
+      if (s.kind === 'run') {
+        const plan = runFor(w, s.key);
+        mins = s.key === 'Wed' ? (ph.n <= 2 ? 45 : 60) : LONG_MIN[ph.n];
+        title = `${s.title} · week ${w}`;
+        desc = `${plan}\n\n5-min brisk walk before and after. Easy pace: you can talk in full sentences.`;
+      } else {
+        const items = sessionItems(w, s.key), mob = w === 24 && s.key === 'B';
+        mins = mob ? 20 : 60;
+        title = `${mob ? 'Core & mobility' : s.title} · week ${w}`;
+        desc = (mob ? 'Easy core and mobility so your legs are fresh for Sunday.\n\n' : '8-minute warm-up first. Rest 60–90s between sets.\n\n') +
+          items.map(it => `• ${exName(it.id)}: ${mob ? it.reps : it.sets + ' × ' + it.reps}`).join('\n');
+      }
+      desc += `\n\nPhase ${ph.n} · ${ph.name}${LIGHTER.includes(w) ? ' · lighter week' : ''}\nLog it in Exercise Routine Tracker.\n#exercise-routine-tracker`;
+      out.push({ title, desc, start: start.getTime(), end: start.getTime() + mins * 60000 });
+    }
+  }
+  return out;
+}
+let calT = 0;
+function calNeedsSync() { if (!CAL_OK || !SETTINGS.cal) return; clearTimeout(calT); calT = setTimeout(calSync, 1500); }
+function calSync() {
+  if (!CAL_OK || !SETTINGS.cal || cal.busy) return;
+  cal.busy = true; cal.msg = ''; paintCal();
+  try { BRIDGE.syncCalendar(String(SETTINGS.cal.id), JSON.stringify(calEvents())); }
+  catch (e) { cal.busy = false; cal.msg = 'Calendar update failed. Try Update now.'; paintCal(); }
+}
+function paintCal() { if (ui.tab === 'plan' && !ui.view) { const y = window.scrollY; render(); window.scrollTo(0, y); } }
+window.__calResult = r => {
+  cal.busy = false;
+  if (r && r.ok) {
+    const d = new Date();
+    SETTINGS.cal.synced = `${fmt(d)} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`; SETTINGS.cal.n = r.added;
+    cal.msg = ''; saveSettings(true);
+    toast(`Calendar updated: ${r.added} sessions added` + (r.removed ? `, ${r.removed} old ones removed` : ''));
+  } else cal.msg = 'Calendar update failed' + (r && r.error ? ': ' + r.error : '') + '. Try Update now.';
+  paintCal();
+};
+function calConnect() {
+  try { BRIDGE.requestCalendarPermission(); } catch (e) { cal.perm = false; paintCal(); }
+}
+window.__calPerm = granted => {
+  cal.perm = !!granted;
+  if (!granted) { paintCal(); return; }
+  try { cal.list = JSON.parse(BRIDGE.calendars()); } catch (e) { cal.list = []; }
+  if (!cal.list.length) { cal.perm = null; toast('No calendars found on this phone. Add your Google account in phone Settings first.'); paintCal(); return; }
+  if (!SETTINGS.cal) {
+    const pick = cal.list.find(c => c.primary && c.google) || cal.list.find(c => c.google) || cal.list[0];
+    SETTINGS.cal = { id: pick.id, name: pick.name };
+    saveSettings(true); calSync();
+  }
+  paintCal();
+};
+
 // ---- backup & restore ----
 function backupJson() {
   const out = {}; for (const k in docs) if (docs[k] && Object.keys(docs[k]).length) out[k] = docs[k];
@@ -2002,6 +2112,13 @@ async function confirmRestore() {
   for (const k of keys) { docs[k] = src[k]; try { await coll.doc(k).set(src[k]); } catch (e) {} i++; if (i % 10 === 0) backupMsg(`Restoring… ${i} of ${keys.length}`); }
   loadSettings(); render(); toast('Backup restored');
 }
+main.addEventListener('change', ev => {
+  if (ev.target.id !== 'cal-pick') return;
+  const c = (cal.list || []).find(x => String(x.id) === ev.target.value); if (!c) return;
+  const oldId = SETTINGS.cal.id;
+  try { BRIDGE.clearCalendar(String(oldId)); } catch (e) {}
+  SETTINGS.cal = { id: c.id, name: c.name }; saveSettings(true); calSync();
+});
 main.addEventListener('change', ev => { if (ev.target.id === 'restore-file' && ev.target.files[0]) doRestore(ev.target.files[0]); });
 window.__appBack = () => { if (ui.view) { const v = ui.view; if (v.type === 'swap' || v.type === 'add') go({ type: 'session', w: v.w, s: v.s }); else go(v.prev || null); return true; } if (ui.tab !== 'week') { ui.tab = 'week'; render(); return true; } return false; };
 window.__backupResult = ok => backupMsg(ok ? 'Backup saved.' : 'Backup not saved.');

@@ -1,6 +1,16 @@
 package com.exerciseroutine.tracker;
 
+import android.Manifest;
 import android.app.Activity;
+import android.content.ContentProviderOperation;
+import android.content.ContentResolver;
+import android.content.pm.PackageManager;
+import android.database.Cursor;
+import android.provider.CalendarContract;
+import org.json.JSONArray;
+import org.json.JSONObject;
+import java.util.ArrayList;
+import java.util.TimeZone;
 import android.content.Intent;
 import android.net.Uri;
 import android.os.Bundle;
@@ -34,6 +44,8 @@ public class MainActivity extends Activity {
     private static final String HOST = "appassets.androidplatform.net";
     private static final int REQ_PICK_FILE = 1;
     private static final int REQ_SAVE_FILE = 2;
+    private static final int REQ_CALENDAR = 3;
+    private static final String MARKER = "#exercise-routine-tracker";
 
     private WebView web;
     private View splash;
@@ -107,6 +119,40 @@ public class MainActivity extends Activity {
         web.loadUrl("https://" + HOST + "/assets/index.html");
     }
 
+    private void jsCall(String fn, String arg) {
+        web.evaluateJavascript("window." + fn + " && window." + fn + "(" + arg + ")", null);
+    }
+
+    /** Remove the sessions this app added to a calendar (they carry a marker line). */
+    private int removeOurs(long cal) {
+        ContentResolver cr = getContentResolver();
+        return cr.delete(CalendarContract.Events.CONTENT_URI,
+                CalendarContract.Events.CALENDAR_ID + "=? AND " + CalendarContract.Events.DESCRIPTION + " LIKE ?",
+                new String[]{String.valueOf(cal), "%" + MARKER + "%"});
+    }
+
+    /** Remove the original sessions Claude put in your calendar before the app could do it (titles like "Strength A (Phase 1)"). */
+    private int removeLegacy() {
+        ContentResolver cr = getContentResolver();
+        ArrayList<String> args = new ArrayList<>();
+        StringBuilder in = new StringBuilder();
+        for (String t : new String[]{"Strength A", "Strength B", "Easy run", "Long run"})
+            for (int p = 1; p <= 4; p++) { if (in.length() > 0) in.append(','); in.append('?'); args.add(t + " (Phase " + p + ")"); }
+        args.add("%Log it in the%");
+        return cr.delete(CalendarContract.Events.CONTENT_URI,
+                CalendarContract.Events.TITLE + " IN (" + in + ") AND " + CalendarContract.Events.DESCRIPTION + " LIKE ?",
+                args.toArray(new String[0]));
+    }
+
+    @Override
+    public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] results) {
+        super.onRequestPermissionsResult(requestCode, permissions, results);
+        if (requestCode != REQ_CALENDAR) return;
+        boolean ok = results.length > 0;
+        for (int r : results) ok &= r == PackageManager.PERMISSION_GRANTED;
+        jsCall("__calPerm", String.valueOf(ok));
+    }
+
     private void hideSplash() {
         if (splash == null || splash.getVisibility() == View.GONE) return;
         splash.animate().alpha(0f).setDuration(250).withEndAction(() -> splash.setVisibility(View.GONE)).start();
@@ -117,6 +163,93 @@ public class MainActivity extends Activity {
     }
 
     private class Bridge {
+        // ---- calendar ----
+        @JavascriptInterface
+        public boolean hasCalendarPermission() {
+            return checkSelfPermission(Manifest.permission.WRITE_CALENDAR) == PackageManager.PERMISSION_GRANTED
+                    && checkSelfPermission(Manifest.permission.READ_CALENDAR) == PackageManager.PERMISSION_GRANTED;
+        }
+
+        @JavascriptInterface
+        public void requestCalendarPermission() {
+            runOnUiThread(() -> {
+                if (hasCalendarPermission()) jsCall("__calPerm", "true");
+                else requestPermissions(new String[]{Manifest.permission.READ_CALENDAR, Manifest.permission.WRITE_CALENDAR}, REQ_CALENDAR);
+            });
+        }
+
+        @JavascriptInterface
+        public String calendars() {
+            JSONArray out = new JSONArray();
+            if (!hasCalendarPermission()) return out.toString();
+            String[] cols = {CalendarContract.Calendars._ID, CalendarContract.Calendars.CALENDAR_DISPLAY_NAME,
+                    CalendarContract.Calendars.ACCOUNT_NAME, CalendarContract.Calendars.ACCOUNT_TYPE,
+                    CalendarContract.Calendars.OWNER_ACCOUNT, CalendarContract.Calendars.IS_PRIMARY};
+            String sel = CalendarContract.Calendars.CALENDAR_ACCESS_LEVEL + ">=? AND " + CalendarContract.Calendars.VISIBLE + "=1";
+            try (Cursor c = getContentResolver().query(CalendarContract.Calendars.CONTENT_URI, cols, sel,
+                    new String[]{String.valueOf(CalendarContract.Calendars.CAL_ACCESS_CONTRIBUTOR)}, null)) {
+                while (c != null && c.moveToNext()) {
+                    JSONObject o = new JSONObject();
+                    String acct = c.getString(2), owner = c.getString(4);
+                    o.put("id", c.getLong(0));
+                    o.put("name", c.getString(1));
+                    o.put("account", acct);
+                    o.put("google", "com.google".equals(c.getString(3)));
+                    o.put("primary", c.getInt(5) == 1 || (acct != null && acct.equals(owner) && acct.equals(c.getString(1))));
+                    out.put(o);
+                }
+            } catch (Exception ignored) {
+            }
+            return out.toString();
+        }
+
+        @JavascriptInterface
+        public void clearCalendar(String calId) {
+            new Thread(() -> {
+                try { removeOurs(Long.parseLong(calId)); } catch (Exception ignored) { }
+            }).start();
+        }
+
+        @JavascriptInterface
+        public void syncCalendar(String calId, String eventsJson) {
+            new Thread(() -> {
+                JSONObject res = new JSONObject();
+                try {
+                    long cal = Long.parseLong(calId);
+                    int removed = removeOurs(cal) + removeLegacy();
+                    JSONArray evs = new JSONArray(eventsJson);
+                    String tz = TimeZone.getDefault().getID();
+                    ArrayList<ContentProviderOperation> ops = new ArrayList<>();
+                    int added = 0;
+                    for (int i = 0; i < evs.length(); i++) {
+                        JSONObject e = evs.getJSONObject(i);
+                        int back = ops.size();
+                        ops.add(ContentProviderOperation.newInsert(CalendarContract.Events.CONTENT_URI)
+                                .withValue(CalendarContract.Events.CALENDAR_ID, cal)
+                                .withValue(CalendarContract.Events.TITLE, e.getString("title"))
+                                .withValue(CalendarContract.Events.DESCRIPTION, e.getString("desc"))
+                                .withValue(CalendarContract.Events.DTSTART, e.getLong("start"))
+                                .withValue(CalendarContract.Events.DTEND, e.getLong("end"))
+                                .withValue(CalendarContract.Events.EVENT_TIMEZONE, tz)
+                                .withValue(CalendarContract.Events.HAS_ALARM, 1)
+                                .build());
+                        ops.add(ContentProviderOperation.newInsert(CalendarContract.Reminders.CONTENT_URI)
+                                .withValueBackReference(CalendarContract.Reminders.EVENT_ID, back)
+                                .withValue(CalendarContract.Reminders.MINUTES, 30)
+                                .withValue(CalendarContract.Reminders.METHOD, CalendarContract.Reminders.METHOD_ALERT)
+                                .build());
+                        added++;
+                        if (ops.size() >= 100) { getContentResolver().applyBatch(CalendarContract.AUTHORITY, ops); ops.clear(); }
+                    }
+                    if (!ops.isEmpty()) getContentResolver().applyBatch(CalendarContract.AUTHORITY, ops);
+                    res.put("ok", true).put("added", added).put("removed", removed);
+                } catch (Exception ex) {
+                    try { res.put("ok", false).put("error", ex.getClass().getSimpleName()); } catch (Exception ignored) { }
+                }
+                runOnUiThread(() -> jsCall("__calResult", res.toString()));
+            }).start();
+        }
+
         @JavascriptInterface
         public void ready() {
             runOnUiThread(MainActivity.this::hideSplash);

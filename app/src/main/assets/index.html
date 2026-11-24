@@ -1537,6 +1537,9 @@ async function initStore() {
 // ---- status helpers ----
 const statusOf = (w, s) => (docs[docId(w, s)] || {}).status || '';
 const weekDone = w => SESSIONS.filter(s => statusOf(w, s) === 'done').length;
+// The day a session is (or was) actually done: the date you set, else its planned day
+const plannedDay = (w, s) => addDays(monday(w), s.off);
+function sessionDay(w, s) { const v = (docs[docId(w, s)] || {}).doneOn; return v ? parseDay(v) : plannedDay(w, s); }
 function statusPill(st, isToday) {
   if (st === 'done') return '<span class="pill done">Done</span>';
   if (st === 'missed') return '<span class="pill missed">Missed</span>';
@@ -1608,12 +1611,12 @@ function viewWeek() {
   }).join('');
   const lbl = phasesInPlan().map(p => `<span style="grid-column:span ${p.to - p.from + 1}">Phase ${p.n}</span>`).join('');
   const cards = SESSIONS.map(s => {
-    const d = addDays(mon, s.off), st = statusOf(w, s), isT = sameDay(d, t);
+    const d = addDays(mon, s.off), st = statusOf(w, s), real = sessionDay(w, s), moved = !sameDay(real, d), isT = sameDay(real, t);
     const detail = s.kind === 'run' ? runFor(w, s.key) : sessionItems(w, s.key).map(it => exName(it.id).replace(/ \(.*\)/, '')).join(' · ');
     const title = (w === 24 && s.key === 'B') ? 'Core & mobility' : s.title;
     return `<button class="sess${isT ? ' is-today' : ''}" data-open="${s.kind}" data-s="${s.key}">
       <span class="date"><small>${s.day}</small><b>${d.getDate()}</b><small>${MON[d.getMonth()]}</small></span>
-      <span class="what"><span class="t"><span class="kind k-${s.kind}"></span>${title}</span><span class="d">${esc(detail)}</span><span class="d">${s.time}</span></span>
+      <span class="what"><span class="t"><span class="kind k-${s.kind}"></span>${title}</span><span class="d">${esc(detail)}</span><span class="d">${moved ? `Moved to ${DAYNAME[real.getDay()].slice(0, 3)} ${fmt(real)} · ` : ''}${s.time}</span></span>
       ${statusPill(st, isT)}</button>`;
   }).join('');
   const reminders = [];
@@ -1679,10 +1682,16 @@ function viewSession(w, sKey) {
   <details class="more card warm"><summary>Warm-up (8 minutes)</summary><div><ol>${WARMUP.map(x => `<li>${esc(x)}</li>`).join('')}</ol></div></details>
   <div class="stack" data-doc="${id}">${exs}</div>
   ${mob ? '' : `<button class="btn addbtn" data-addex="1">+ Add an exercise</button><p class="small muted" style="margin-top:-6px">Swaps, removals and additions apply to every ${s.title} in Phase ${ph.n}. Undo them on the Plan tab.</p>`}
-  ${notesAndStatus(id, d)}`;
+  ${notesAndStatus(id, d, date)}`;
 }
-function notesAndStatus(id, d) {
-  return `<div class="card" data-doc="${id}"><div class="field"><label for="in-${id}-notes">Notes</label><textarea id="in-${id}-notes" data-k="notes" placeholder="How did it feel? Anything to change next time?">${esc(d.notes)}</textarea></div>
+function notesAndStatus(id, d, planned) {
+  const pIso = iso(planned), val = d.doneOn || pIso, moved = d.doneOn && d.doneOn !== pIso;
+  return `<div class="card" data-doc="${id}">
+  <div class="field"><label for="in-${id}-doneOn">Date done</label>
+    <div class="row" style="gap:10px"><input id="in-${id}-doneOn" data-k="doneOn" data-planned="${pIso}" type="date" value="${val}" style="font-family:var(--f-body);flex:1">
+    ${moved ? `<button class="btn link small" data-resetday="${pIso}">Back to ${esc(fmt(planned))}</button>` : ''}</div>
+    <span class="small muted">${moved ? `Moved from ${esc(DAYNAME[planned.getDay()])} ${esc(fmt(planned))}.` : `Planned for ${esc(DAYNAME[planned.getDay()])} ${esc(fmt(planned))}. Change it if you do this session on another day.`}</span></div>
+  <div class="field"><label for="in-${id}-notes">Notes</label><textarea id="in-${id}-notes" data-k="notes" placeholder="How did it feel? Anything to change next time?">${esc(d.notes)}</textarea></div>
   <div class="actions"><button class="btn ${d.status === 'done' ? 'on-done' : 'primary'}" data-status="done">${d.status === 'done' ? '✓ Done' : 'Mark done'}</button>
   <button class="btn ${d.status === 'missed' ? 'on-missed' : ''}" data-status="missed">Missed</button></div></div>`;
 }
@@ -1770,7 +1779,7 @@ function viewRun(w, sKey) {
     </div>
   </div>
   <div class="card"><h3>Running form</h3>${fig('run', 'fig bigfig')}${tipsBlock(EX.run)}</div>
-  ${notesAndStatus(id, d)}`;
+  ${notesAndStatus(id, d, date)}`;
 }
 
 // ---- Exercise detail & library ----
@@ -1970,6 +1979,9 @@ main.addEventListener('click', ev => {
   if (D.calunlink) { SETTINGS.cal = null; saveSettings(true); toast('Calendar unlinked. Sessions already in it stay there.'); render(); return; }
   if (D.backup) { doBackup(); return; }
   if (D.confirmrestore) { confirmRestore(); return; }
+  if (D.resetday) {
+    const id = t.closest('[data-doc]').dataset.doc; delete getDoc(id).doneOn; touch(id); calNeedsSync(); render(); return;
+  }
   if (D.status) {
     const id = t.closest('[data-doc]').dataset.doc, d = getDoc(id);
     d.status = d.status === D.status ? '' : D.status;
@@ -2019,7 +2031,7 @@ function calEvents() {
   for (let w = 1; w <= totalWeeks(); w++) {
     const ph = phaseOf(w);
     for (const s of SESSIONS) {
-      const d = addDays(monday(w), s.off);
+      const d = sessionDay(w, s);
       const [hh, mm] = s.key === 'Wed' ? [17, 30] : s.key === 'Sun' ? [10, 0] : [18, 0];
       const start = new Date(d.getFullYear(), d.getMonth(), d.getDate(), hh, mm);
       let mins, title, desc;
@@ -2134,6 +2146,11 @@ function onField(ev) {
     d.ex[i] ||= {}; d.ex[i].id = exEl.dataset.ex;
     if (k === 'r') { const r = d.ex[i].r ||= []; r[+el.dataset.j] = val; for (let x = 0; x < r.length; x++) if (r[x] == null) r[x] = ''; }
     else d.ex[i][k] = val;
+  } else if (k === 'doneOn') {
+    if (!val || val === el.dataset.planned) delete d.doneOn; else d.doneOn = val;
+    touch(id); calNeedsSync();
+    if (ev.type === 'change') { const y = window.scrollY; render(); window.scrollTo(0, y); }
+    return;
   } else d[k] = val;
   touch(id);
   if (k === 'dist' || k === 'time') { const p = $('#pace'); if (p) p.textContent = pace(d.dist, d.time); }

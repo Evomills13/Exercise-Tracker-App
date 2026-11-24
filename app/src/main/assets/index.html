@@ -228,6 +228,10 @@ details.more > div { padding-top: 10px; display: flex; flex-direction: column; g
 .change:last-child { border-bottom: 0; }
 .toast { position: fixed; left: 50%; transform: translateX(-50%); bottom: calc(var(--tabh) + 74px + env(safe-area-inset-bottom, 0px)); z-index: 40; max-width: min(92vw, 520px);
   background: var(--ink); color: var(--bg); padding: 10px 14px; border-radius: 10px; font-size: 14px; box-shadow: 0 6px 18px rgb(0 0 0 / .2); }
+.sess .date.moved { background: var(--accent-soft); box-shadow: inset 0 0 0 1.5px var(--accent); }
+.sess .date.moved small:first-child { color: var(--accent); }
+.sess .date sup { font-size: 15px; color: var(--accent); margin-left: 1px; vertical-align: 9px; }
+.movednote { color: var(--accent); font-weight: 600; }
 .toast[hidden] { display: none; }
 .filebtn { position: relative; overflow: hidden; }
 .filebtn input { position: absolute; inset: 0; opacity: 0; cursor: pointer; }
@@ -1615,8 +1619,8 @@ function viewWeek() {
     const detail = s.kind === 'run' ? runFor(w, s.key) : sessionItems(w, s.key).map(it => exName(it.id).replace(/ \(.*\)/, '')).join(' · ');
     const title = (w === 24 && s.key === 'B') ? 'Core & mobility' : s.title;
     return `<button class="sess${isT ? ' is-today' : ''}" data-open="${s.kind}" data-s="${s.key}">
-      <span class="date"><small>${s.day}</small><b>${d.getDate()}</b><small>${MON[d.getMonth()]}</small></span>
-      <span class="what"><span class="t"><span class="kind k-${s.kind}"></span>${title}</span><span class="d">${esc(detail)}</span><span class="d">${moved ? `Moved to ${DAYNAME[real.getDay()].slice(0, 3)} ${fmt(real)} · ` : ''}${s.time}</span></span>
+      <span class="date${moved ? ' moved' : ''}"${moved ? ` title="Moved from ${DAYNAME[d.getDay()]} ${fmt(d)}"` : ''}><small>${DAYNAME[real.getDay()].slice(0, 3)}</small><b>${real.getDate()}${moved ? '<sup aria-hidden="true">*</sup>' : ''}</b><small>${MON[real.getMonth()]}</small></span>
+      <span class="what"><span class="t"><span class="kind k-${s.kind}"></span>${title}</span><span class="d">${esc(detail)}</span>${moved ? `<span class="d movednote">* Moved from ${DAYNAME[d.getDay()].slice(0, 3)} ${fmt(d)}</span>` : ''}<span class="d">${s.time}</span></span>
       ${statusPill(st, isT)}</button>`;
   }).join('');
   const reminders = [];
